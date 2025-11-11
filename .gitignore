@@ -1,0 +1,5 @@
+# Local script that sets the required environment variables
+env.ps1
+
+# Exclude all output
+*[Oo]utput*/

@@ -26,6 +26,16 @@ $ProgressPreference = "SilentlyContinue"
 
 # Constants
 # --- No Constants ---
+$Global:highConcurrencyThreshold = 4
+
+#
+# TYPES
+#
+enum TaskEventType {
+    Submit
+    Start
+    End
+}
 
 #
 # FUNCTIONS
@@ -196,7 +206,8 @@ function GetBgTasksWarningsSummary {
     }
 
     Write-Host ""
-    Write-Host "Task Warning Count Summary:" -ForegroundColor Cyan
+    Write-Host "Task Warning Count Summary (sorted by number of tasks with that warning count):" -ForegroundColor Cyan
+    # The sorting here could be changed. Maybe we want to count by warningCount value, not by number of tasks with that warningCount
     $Tasks | Group-Object -Property warningCount | Select-Object -Property Name, Count | Sort-Object Count -Descending | ForEach-Object {
         Write-Host "  $($_.Name) warnings: $($_.Count) tasks" -ForegroundColor Gray
     }
@@ -214,12 +225,12 @@ function GetBgTasksReportFrequencySummary {
 
     Write-Host ""
     Write-Host "Top 10 Projects by REPORT Task Frequency:" -ForegroundColor Cyan
-    $allTasks | Where-Object { $_.type -eq "REPORT" } | Group-Object -Property componentKey | Select-Object -Property Name, Count | Sort-Object Count -Descending | Select-Object -First 10 | ForEach-Object {
+    $Tasks | Where-Object { $_.type -eq "REPORT" } | Group-Object -Property componentKey | Select-Object -Property Name, Count | Sort-Object Count -Descending | Select-Object -First 10 | ForEach-Object {
         Write-Host "  $($_.Name): $($_.Count)" -ForegroundColor Gray
     }
 }
 
-function TemplateFunction {
+function GetBgTasksConcurrencySummary {
     param(
         [array]$Tasks
     )
@@ -227,6 +238,124 @@ function TemplateFunction {
     if ($Tasks.Count -eq 0) {
         Write-Error "No tasks provided for date range analysis."
         return $null
+    }
+
+    Write-Host ""
+    Write-Host "Concurrent Task Analysis:" -ForegroundColor Cyan
+
+    # Create events for task start and end times
+    $events = @()
+
+    foreach ($task in $Tasks) {
+        # There is a mistake here - the properties used for start and end times are wrong
+        $submittedTime = [datetime]$task.submittedAt
+        $startTime = [datetime]$task.startedAt
+        # The API returns timestamps rounded to a second. Use executionTimeMs to calculate end time to get more precise end time.
+        $endTime = [datetime]$task.startedAt.AddMilliseconds($task.executionTimeMs)
+
+        # Add submitted event (+1 concurrent task)
+        #$events += [PSCustomObject]@{
+        #    Time   = $submittedTime
+        #    Type   = [TaskEventType]::Submit
+        #    TaskId = $task.id
+        #}
+
+        # Add start event (+1 concurrent task)
+        $events += [PSCustomObject]@{
+            Time   = $startTime
+            Type   = [TaskEventType]::Start
+            TaskId = $task.id
+        }
+    
+        # Add end event (-1 concurrent task)
+        $events += [PSCustomObject]@{
+            Time   = $endTime
+            Type   = [TaskEventType]::End
+            TaskId = $task.id
+        }
+    }
+
+    # Sort and group events by time.
+    # Because the time stamps are rounded to a second, quite a few events happen at the exact same time.
+    # So the processing needs to be done for each time point, not for each event individually.
+    $groupedEventsByTime = $($events | Sort-Object Time | Group-Object Time)
+    $totalEvents = $events.Count
+    # $groupedEventsByTime
+    
+    # Calculate concurrent tasks at each point in time
+    $currentConcurrent = 0
+    $maxConcurrent = 0
+    $maxConcurrentTime = $null
+    $concurrencyLevels = @{}
+    $highConcurrencyPeriods = @()
+    $highConcurrencyStart = $null
+    
+    foreach ($timeStamp in $groupedEventsByTime) {
+        foreach ($taskEvent in $timeStamp.Group) {
+            if ($taskEvent.Type -eq [TaskEventType]::Start) {
+                $currentConcurrent++
+                #Write-Host "Start Task $($taskEvent.TaskId) at $($taskEvent.Time.ToString('dd.MM.yyyy HH:mm:ss.fff')): $currentConcurrent concurrent tasks" -ForegroundColor DarkGray
+            }
+            elseif ($taskEvent.Type -eq [TaskEventType]::End) {
+                $currentConcurrent--
+                #Write-Host "End   Task $($taskEvent.TaskId) at $($taskEvent.Time.ToString('dd.MM.yyyy HH:mm:ss.fff')): $currentConcurrent concurrent tasks" -ForegroundColor DarkGray
+            }
+        }
+
+        if ($currentConcurrent -gt $maxConcurrent) {
+            $maxConcurrent = $currentConcurrent
+            $maxConcurrentTime = $taskEvent.Time
+        }
+
+        # Print current concurrency at this time point
+        # "$($timeStamp.Group[0].Time), $currentConcurrent" >> concurrency-points.csv
+
+        # Track how often each concurrency level occurs
+        if (-not $concurrencyLevels.ContainsKey($currentConcurrent)) {
+            $concurrencyLevels[$currentConcurrent] = 0
+        }
+        $concurrencyLevels[$currentConcurrent]++
+
+        # Track high concurrency periods
+        # When we cross to or above the threshold, record the start time.
+        # When we drop below the threshold and we are currently tracking a high concurrency period, record the period.
+        if (($currentConcurrent -ge $Global:highConcurrencyThreshold) -and ($null -eq $highConcurrencyStart)) {
+            $highConcurrencyStart = $timeStamp.Group[0].Time
+        }
+        elseif (($currentConcurrent -lt $Global:highConcurrencyThreshold) -and ($null -ne $highConcurrencyStart)) {
+            $highConcurrencyPeriods += [PSCustomObject]@{
+                Start    = $highConcurrencyStart
+                End      = $timeStamp.Group[0].Time
+                Duration = $timeStamp.Group[0].Time.Subtract($highConcurrencyStart).TotalMilliseconds
+            }
+
+            $highConcurrencyStart = $null
+        }
+    }
+
+    Write-Host ""
+    Write-Host "  Maximum concurrent tasks: $maxConcurrent" -ForegroundColor Yellow
+    Write-Host "  Occurred at: $(Get-Date $maxConcurrentTime -Format 'dd.MM.yyyy HH:mm:ss.fff')" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "  Concurrency Level Distribution:" -ForegroundColor Cyan
+    $concurrencyLevels.GetEnumerator() | Sort-Object Key | ForEach-Object {
+        $percentage = [math]::Round(($_.Value / $totalEvents) * 100, 2)
+        Write-Host "    $($_.Key) tasks running: $($_.Value) occurrences ($percentage%)" -ForegroundColor Gray
+    }
+
+    Write-Host ""
+    Write-Host "  High Concurrency Periods (>= $($Global:highConcurrencyThreshold) tasks):" -ForegroundColor Cyan
+
+    if ($highConcurrencyPeriods.Count -gt 0) {
+        #$highConcurrencyPeriods | Sort-Object Start -Descending | Select-Object -First 10 | ForEach-Object {
+        $highConcurrencyPeriods | Sort-Object Start -Descending | ForEach-Object {
+            $durationStr = "$([math]::Round($_.Duration, 2)) milliseconds"
+            $color = if ($_.Duration -gt 1000) { "Gray" } else { "DarkGray" }
+            Write-Host "    $(Get-Date $_.Start -Format 'dd.MM.yyyy HH:mm:ss') - $(Get-Date $_.End -Format 'dd.MM.yyyy HH:mm:ss') ($durationStr)" -ForegroundColor $color
+        }
+    }
+    else {
+        Write-Host "    No periods found with >= $($Global:highConcurrencyThreshold) concurrent tasks" -ForegroundColor Gray
     }
 }
 
@@ -254,130 +383,4 @@ GetBgTasksSubmitterSummary -Tasks $allTasks
 GetBgTasksBranchTypeSummary -Tasks $allTasks
 GetBgTasksWarningsSummary -Tasks $allTasks
 GetBgTasksReportFrequencySummary -Tasks $allTasks
-
-exit 0
-
-
-
-Write-Host ""
-Write-Host "Concurrent Task Analysis:" -ForegroundColor Cyan
-
-# Filter tasks that have both startedAt and executedAt (completed tasks)
-$completedTasks = $allTasks | Where-Object { $_.startedAt -and $_.executedAt }
-
-Write-Host "  Analyzing $($completedTasks.Count) completed tasks..." -ForegroundColor Gray
-
-# Create events for task start and end times
-$events = @()
-
-foreach ($task in $completedTasks) {
-    # There is a mistake here - the properties used for start and end times are wrong
-    $startTime = [datetime]$task.startedAt
-    $endTime = [datetime]$task.executedAt
-    
-    # Add start event (+1 concurrent task)
-    $events += [PSCustomObject]@{
-        Time   = $startTime
-        Type   = 'Start'
-        TaskId = $task.id
-    }
-    
-    # Add end event (-1 concurrent task)
-    $events += [PSCustomObject]@{
-        Time   = $endTime
-        Type   = 'End'
-        TaskId = $task.id
-    }
-}
-
-# Sort events by time
-#$sortedEvents = $events | Sort-Object Time
-$sortedEvents = $events | Sort-Object Time, @{Expression = "Type"; Descending = $true }
-#$sortedEvents = $events | Sort-Object Time, Type
-
-# Calculate concurrent tasks at each point in time
-$currentConcurrent = 0
-$maxConcurrent = 0
-$maxConcurrentTime = $null
-$concurrencyLevels = @{}
-
-foreach ($event in $sortedEvents) {
-    if ($event.Type -eq 'Start') {
-        $currentConcurrent++
-        
-        if ($currentConcurrent -gt $maxConcurrent) {
-            $maxConcurrent = $currentConcurrent
-            $maxConcurrentTime = $event.Time
-        }
-    }
-    else {
-        $currentConcurrent--
-    }
-    
-    # Track how often each concurrency level occurs
-    if (-not $concurrencyLevels.ContainsKey($currentConcurrent)) {
-        $concurrencyLevels[$currentConcurrent] = 0
-    }
-    $concurrencyLevels[$currentConcurrent]++
-}
-
-Write-Host ""
-Write-Host "  Maximum concurrent tasks: $maxConcurrent" -ForegroundColor Yellow
-Write-Host "  Occurred at: $(Get-Date $maxConcurrentTime -Format 'dd.MM.yyyy HH:mm:ss')" -ForegroundColor Gray
-
-Write-Host ""
-Write-Host "  Concurrency Level Distribution:" -ForegroundColor Cyan
-$concurrencyLevels.GetEnumerator() | Sort-Object Key | ForEach-Object {
-    $percentage = [math]::Round(($_.Value / $sortedEvents.Count) * 100, 2)
-    Write-Host "    $($_.Key) tasks running: $($_.Value) occurrences ($percentage%)" -ForegroundColor Gray
-}
-
-# Optional: Find time periods with high concurrency (e.g., >= 5 tasks)
-Write-Host ""
-Write-Host "  High Concurrency Periods (>= 5 tasks):" -ForegroundColor Cyan
-
-$currentConcurrent = 0
-$highConcurrencyStart = $null
-$highConcurrencyPeriods = @()
-
-$sortedEvents | ConvertTo-Json > sortedEvents.log
-
-foreach ($event in $sortedEvents) {
-    #$event.Time >> events.log
-    if ($event.Type -eq 'Start') {
-        $currentConcurrent++
-        
-        if ($currentConcurrent -ge 5 -and $null -eq $highConcurrencyStart) {
-            $highConcurrencyStart = $event.Time
-        }
-    }
-    else {
-        if ($currentConcurrent -ge 5 -and $currentConcurrent -eq 5) {
-            # We're dropping below 5, record this period
-            $highConcurrencyPeriods += [PSCustomObject]@{
-                Start    = $highConcurrencyStart
-                End      = $event.Time
-                Duration = ($event.Time - $highConcurrencyStart).TotalMinutes
-            }
-            $highConcurrencyStart = $null
-        }
-        $currentConcurrent--
-    }
-}
-
-if ($highConcurrencyPeriods.Count -gt 0) {
-    $highConcurrencyPeriods | Sort-Object Start -Descending | Select-Object -First 10 | ForEach-Object {
-        $durationStr = if ($_.Duration -gt 60) { 
-            "$([math]::Round($_.Duration / 60, 2)) hours" 
-        }
-        else { 
-            "$([math]::Round($_.Duration, 2)) minutes" 
-        }
-        Write-Host "    $(Get-Date $_.Start -Format 'dd.MM.yyyy HH:mm:ss') - $(Get-Date $_.End -Format 'dd.MM.yyyy HH:mm:ss') ($durationStr)" -ForegroundColor Gray
-    }
-}
-else {
-    Write-Host "    No periods found with >= 5 concurrent tasks" -ForegroundColor Gray
-}
-
-# TODO: Pending tasks, etc.
+GetBgTasksConcurrencySummary -Tasks $allTasks

@@ -34,7 +34,8 @@ param(
     [string]$SonarHostUrl,
     [string]$SonarToken,
     [string]$OutputDirectory = "output",
-    [int]$ThrottleLimit = 5
+    [int]$ThrottleLimit = 5,
+    [DateTime]$TasksFrom
 )
 
 # Set progress preference to improve performance and avoid progress bar interference
@@ -100,10 +101,19 @@ $dateTime = (Get-Date).AddMinutes(-5)
 $maxExecutedAt = $dateTime.ToString("yyyy-MM-ddTHH:mm:ss") + $dateTime.ToString("zzz").Replace(":", "")
 $maxExecutedAtEncoded = [Uri]::EscapeDataString($maxExecutedAt)
 
+if ($null -ne $TasksFrom) {
+    $minSubmittedAt = $TasksFrom.ToString("yyyy-MM-ddTHH:mm:ss") + $TasksFrom.ToString("zzz").Replace(":", "")
+    $minSubmittedAtEncoded = [Uri]::EscapeDataString($minSubmittedAt)
+
+    $apiUrl = "$SonarHostUrl/api/ce/activity?maxExecutedAt=$maxExecutedAtEncoded&ps=$PAGE_SIZE&p=1&minSubmittedAt=$minSubmittedAtEncoded"
+}
+else {
+    $apiUrl = "$SonarHostUrl/api/ce/activity?maxExecutedAt=$maxExecutedAtEncoded&ps=$PAGE_SIZE&p=1"
+}
+
 Write-Host "Fetching first page to determine total number of pages..." -ForegroundColor Cyan
 
 # Fetch first page to get total count
-$apiUrl = "$SonarHostUrl/api/ce/activity?maxExecutedAt=$maxExecutedAtEncoded&ps=$PAGE_SIZE&p=1"
 $headers = @{
     "Authorization" = "Bearer $SonarToken"
 }
@@ -170,9 +180,15 @@ try {
         $outDir = $using:OutputDirectory
         $filePrefix = $using:OUTPUT_FILE_PREFIX
         $fileExtension = $using:OUTPUT_FILE_EXTENSION
-        
-        # Build API URL
-        $apiUrl = "$sonarUrl/api/ce/activity?maxExecutedAt=$maxExecutedAtEnc&ps=$pageSize&p=$pageNumber"
+        if ($using:TasksFrom -ne $null) {
+            $minSubmittedAtEnc = $using:minSubmittedAtEncoded
+            # Build API URL
+            $apiUrl = "$sonarUrl/api/ce/activity?maxExecutedAt=$maxExecutedAtEnc&ps=$pageSize&p=$pageNumber&minSubmittedAt=$minSubmittedAtEnc"
+        }
+        else { 
+            # Build API URL
+            $apiUrl = "$sonarUrl/api/ce/activity?maxExecutedAt=$maxExecutedAtEnc&ps=$pageSize&p=$pageNumber"
+        }
         
         # Make API request
         $headers = @{

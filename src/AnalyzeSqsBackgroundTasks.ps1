@@ -27,6 +27,19 @@ $ProgressPreference = "SilentlyContinue"
 # Constants
 # --- No Constants ---
 $Global:highConcurrencyThreshold = 4
+#$Global:PendingTimeThresholdsSec = @(
+#    0,
+#    1,
+#    5,
+#    10,
+#    20,
+#    30,
+#    40,
+#    60,
+#    120,
+#    300,
+#    600
+#)
 
 #
 # TYPES
@@ -350,8 +363,8 @@ function GetBgTasksConcurrencySummary {
         #$highConcurrencyPeriods | Sort-Object Start -Descending | Select-Object -First 10 | ForEach-Object {
         $highConcurrencyPeriods | Sort-Object Start -Descending | ForEach-Object {
             $durationStr = "$([math]::Round($_.Duration, 2)) milliseconds"
-            $color = if ($_.Duration -gt 1000) { "Gray" } else { "DarkGray" }
-            Write-Host "    $(Get-Date $_.Start -Format 'dd.MM.yyyy HH:mm:ss') - $(Get-Date $_.End -Format 'dd.MM.yyyy HH:mm:ss') ($durationStr)" -ForegroundColor $color
+            # $color = if ($_.Duration -gt 1000) { "Gray" } else { "DarkGray" }
+            # Write-Host "    $(Get-Date $_.Start -Format 'dd.MM.yyyy HH:mm:ss') - $(Get-Date $_.End -Format 'dd.MM.yyyy HH:mm:ss') ($durationStr)" -ForegroundColor $color
         }
     }
     else {
@@ -359,9 +372,46 @@ function GetBgTasksConcurrencySummary {
     }
 }
 
+function GetBgTasksPendingTimeSummary {
+    param(
+        [array]$Tasks
+    )
+
+    Write-Host ""
+    Write-Host "Task Pending Time Summary:" -ForegroundColor Cyan
+
+    $pendingTimeMsList = @()
+
+    foreach ($task in $($Tasks | Where-Object { $_.type -ne "ISSUE_SYNC" })) {
+        $submittedTime = [datetime]$task.submittedAt
+        $startedTime = [datetime]$task.startedAt
+        $pendingTimeMs = ($startedTime - $submittedTime).TotalMilliseconds
+
+        $pendingTimeMsList += $pendingTimeMs / 1000
+
+        if ($pendingTimeMs -eq 57159000) {
+            Write-Host "  WARNING: Task ID $($task.id) has pending time of $([math]::Round($pendingTimeMs, 2)) milliseconds" -ForegroundColor Yellow
+        }
+
+        #$task | Add-Member -MemberType NoteProperty -Name pendingTimeMs -Value $pendingTimeMs
+
+        #Write-Host "  Task ID $($task.id): Pending Time = " -ForegroundColor DarkGray -NoNewline
+        #Write-Host "$([math]::Round($pendingTimeMs, 2)) " -ForegroundColor Green -NoNewline
+        #Write-Host "milliseconds" -ForegroundColor DarkGray
+
+    }
+
+    $pendingTimeMsList | Sort-Object -Descending | Group-Object | Select-Object -Property Name, Count | ForEach-Object {
+        Write-Host "  Pending Time: $($_.Name) seconds - $($_.Count) tasks" -ForegroundColor Gray
+    }
+}
+
 #
 # SCRIPT
 #
+
+# Start stopwatch
+$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 # Resolve the input directory path
 $resolvedInputDirectory = Resolve-DirectoryPath -DirectoryPath $InputFilesDirectory
@@ -383,4 +433,7 @@ GetBgTasksSubmitterSummary -Tasks $allTasks
 GetBgTasksBranchTypeSummary -Tasks $allTasks
 GetBgTasksWarningsSummary -Tasks $allTasks
 GetBgTasksReportFrequencySummary -Tasks $allTasks
-GetBgTasksConcurrencySummary -Tasks $allTasks
+#GetBgTasksConcurrencySummary -Tasks $allTasks
+GetBgTasksPendingTimeSummary -Tasks $allTasks
+
+Write-Host "Total time: $($stopwatch.Elapsed.ToString('hh\:mm\:ss\.fff'))" -ForegroundColor Green

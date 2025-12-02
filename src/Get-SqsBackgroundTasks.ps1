@@ -21,6 +21,9 @@
     The maximum number of parallel requests to execute simultaneously. Default is 5.
     Increase for faster downloads if your network and server can handle it.
 
+.PARAMETER BasicAuthentication
+    Use Basic Authentication instead of Bearer token for authentication. Required for SonarQube instances that do not support Bearer tokens (e.g., SonarQube 9.9).
+
 .EXAMPLE
     .\Get-BackgroundTasks.ps1
     Uses environment variables SONAR_HOST_URL and SONAR_TOKEN with default throttle limit of 5
@@ -34,7 +37,8 @@ param(
     [string]$SonarHostUrl,
     [string]$SonarToken,
     [string]$OutputDirectory = "output",
-    [int]$ThrottleLimit = 5
+    [int]$ThrottleLimit = 5,
+    [switch]$BasicAuthentication
 )
 
 # Set progress preference to improve performance and avoid progress bar interference
@@ -104,8 +108,17 @@ Write-Host "Fetching first page to determine total number of pages..." -Foregrou
 
 # Fetch first page to get total count
 $apiUrl = "$SonarHostUrl/api/ce/activity?maxExecutedAt=$maxExecutedAtEncoded&ps=$PAGE_SIZE&p=1"
-$headers = @{
-    "Authorization" = "Bearer $SonarToken"
+
+if ($BasicAuthentication) {
+    $encodedCreds = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("$($SonarToken):"))
+    $headers = @{
+        "Authorization" = "Basic $encodedCreds"
+    }
+}
+else {
+    $headers = @{
+        "Authorization" = "Bearer $SonarToken"
+    }
 }
 
 try {
@@ -145,8 +158,8 @@ catch {
     exit 1
 }
 
-# If there's only one page, we're done
-if ($totalPages -eq 1) {
+# If there's only one page, we're done. If there are 0 pages, it means there are no tasks and we are also done.
+if ($totalPages -le 1) {
     $stopwatch.Stop()
     
     Write-Host "Successfully fetched all background tasks!" -ForegroundColor Green
@@ -191,19 +204,19 @@ try {
             
             # Return result for tracking
             [PSCustomObject]@{
-                Page = $pageNumber
+                Page      = $pageNumber
                 TaskCount = $responseObject.tasks.Count
-                Success = $true
-                Error = $null
+                Success   = $true
+                Error     = $null
             }
         }
         catch {
             # Return error for tracking
             [PSCustomObject]@{
-                Page = $pageNumber
+                Page      = $pageNumber
                 TaskCount = 0
-                Success = $false
-                Error = $_.Exception.Message
+                Success   = $false
+                Error     = $_.Exception.Message
             }
         }
     }

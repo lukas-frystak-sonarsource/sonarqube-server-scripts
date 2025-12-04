@@ -178,6 +178,7 @@ try {
         $pageNumber = $_
         $sonarUrl = $using:SonarHostUrl
         $token = $using:SonarToken
+        $basicAuth = $using:BasicAuthentication
         $pageSize = $using:PAGE_SIZE
         $maxExecutedAtEnc = $using:maxExecutedAtEncoded
         $outDir = $using:OutputDirectory
@@ -187,11 +188,20 @@ try {
         # Build API URL
         $apiUrl = "$sonarUrl/api/ce/activity?maxExecutedAt=$maxExecutedAtEnc&ps=$pageSize&p=$pageNumber"
         
-        # Make API request
-        $headers = @{
-            "Authorization" = "Bearer $token"
+        # Set authentication headers
+        if ($basicAuth) {
+            $encodedCreds = [System.Convert]::ToBase64String([System.Text.Encoding]::ASCII.GetBytes("$($token):"))
+            $headers = @{
+                "Authorization" = "Basic $encodedCreds"
+            }
+        }
+        else {
+            $headers = @{
+                "Authorization" = "Bearer $token"
+            }
         }
         
+        # Make API request
         try {
             $response = Invoke-WebRequest -Uri $apiUrl -Method Get -Headers $headers -UseBasicParsing -ErrorAction Stop
             $responseJson = $response.Content

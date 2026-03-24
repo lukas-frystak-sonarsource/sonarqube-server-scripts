@@ -10,7 +10,7 @@ This repository contains scripts that can be used on SonarQube Server.
 
 Example execution:
 ```
-Get-BackgroundTasks.ps1 -SonarHostUrl "https://sonarqube.example.com" -SonarToken "squ_xxxxxxxxxxxx" -OutputDirectory './bg-tasks-output'
+Get-SqsBackgroundTasks.ps1 -SonarHostUrl "https://sonarqube.example.com" -SonarToken "squ_xxxxxxxxxxxx" -OutputDirectory './bg-tasks-output'
 ```
 
 Notes:

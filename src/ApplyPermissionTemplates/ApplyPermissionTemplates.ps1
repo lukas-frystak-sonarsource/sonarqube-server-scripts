@@ -5,13 +5,26 @@ param (
     [string[]]$ProjectTags = $null,
     [switch]$OnlyValidateTemplates = $false,
     [switch]$DebugLog = $false,
-    [switch]$PrintProjectAssignments = $false
-
+    [switch]$PrintProjectAssignments = $false,
+    [string]$Organization = $null
 )
 
 # Dot-source other PowerShell files containing classes and helper functions
 . ./HelperFunctions.ps1
 . ./PermissionTemplatesHandler.ps1
+
+##################################################################################################################################
+##################################################################################################################################
+# Validate input
+if ($SonarQubeUrl -like "*sonarcloud*" -and [string]::IsNullOrEmpty($Organization)) {
+    Write-Error "Organization parameter is required for SonarQube Cloud."
+    Exit 1
+}
+
+if ($SonarQubeUrl -notlike "*sonarcloud*" -and -not [string]::IsNullOrEmpty($Organization)) {
+    Write-Error "Organization parameter is not required for SonarQube Server."
+    Exit 1
+}
 
 ##################################################################################################################################
 ##################################################################################################################################
@@ -29,7 +42,13 @@ $ProgressPreference = "SilentlyContinue"
 ##################################################################################################################################
 ##################################################################################################################################
 
-$permissionTemplatesHandler = [PermissionTemplatesHandler]::new($SONARQUBE_URL, $httpRequestHeaders, $OnlyValidateTemplates, $DebugLog)
+$permissionTemplatesHandler = [PermissionTemplatesHandler]::new(
+    $SONARQUBE_URL,
+    $httpRequestHeaders,
+    $OnlyValidateTemplates,
+    $DebugLog,
+    $Organization
+)
 
 $permissionTemplatesHandler.GetPermissionTemplates()
 $permissionTemplatesHandler.GetSonarQubeProjects()

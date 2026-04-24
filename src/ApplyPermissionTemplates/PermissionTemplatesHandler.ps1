@@ -22,13 +22,15 @@ class PermissionTemplatesHandler {
     # The hashtable is in the format: name, project key pattern
     [PermissionTemplateInfo[]]$Templates = $null
     [string[]]$ProjectKeys = $null
+    [string]$SqcOrganization = $null
 
     # Constructors
-    PermissionTemplatesHandler([string]$sonarQubeUrl, [hashtable]$httpRequestHeaders, [bool]$onlyValidateTemplates, [bool]$debugLog) {
+    PermissionTemplatesHandler([string]$sonarQubeUrl, [hashtable]$httpRequestHeaders, [bool]$onlyValidateTemplates, [bool]$debugLog, [string]$sqcOrganization) {
         $this.SonarQubeUrl = $sonarQubeUrl
         $this.HttpRequestHeaders = $httpRequestHeaders
         $this.OnlyValidateTemplates = $onlyValidateTemplates
         $this.DebugLog = $debugLog
+        $this.SqcOrganization = $sqcOrganization
     }
 
     [void] GetPermissionTemplates() {
@@ -36,9 +38,10 @@ class PermissionTemplatesHandler {
         $response = $null
 
         try {
+            $orgParam = if ($null -ne $this.SqcOrganization) { "?organization=$($this.SqcOrganization)" } else { "" }
             $response = Invoke-WebRequest -Headers $this.httpRequestHeaders `
                 -Method GET `
-                -Uri "$($this.SonarQubeUrl)/api/permissions/search_templates"
+                -Uri "$($this.SonarQubeUrl)/api/permissions/search_templates$orgParam"
         }
         catch {
             HandleException $_
@@ -74,9 +77,10 @@ class PermissionTemplatesHandler {
             $currentPage++
 
             try {
+                $orgParam = if ($null -ne $this.SqcOrganization) { "&organization=$($this.SqcOrganization)" } else { "" }
                 $response = Invoke-WebRequest -Headers $this.httpRequestHeaders `
                     -Method GET `
-                    -Uri "$($this.SonarQubeUrl)/api/projects/search?p=$currentPage&ps=500"
+                    -Uri "$($this.SonarQubeUrl)/api/projects/search?p=$currentPage&ps=500$orgParam"
             }
             catch {
                 HandleException $_
